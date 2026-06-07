@@ -16,12 +16,15 @@ blueprint:
     motion_sensors:
       name: Motion sensors
       description: >
-        One or more motion sensors. If your Zigbee2MQTT sensors expose as
-        device_class "occupancy", remove the device_class line or pick manually.
+        One or more motion / occupancy sensors. Both device_class "motion" and
+        "occupancy" are shown, so Zigbee2MQTT presence sensors (which usually
+        report as "occupancy") appear in the list.
       selector:
         entity:
           domain: binary_sensor
-          device_class: motion
+          device_class:
+            - motion
+            - occupancy
           multiple: true
 
     lights:

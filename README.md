@@ -5,9 +5,6 @@ brightness (sine curve, separate morning/evening minimums, optional auto-scaling
 to today's peak sun), a cancellable off-delay, periodic brightness refresh while
 occupied, and optional manual-override protection.
 
-> **Note:** HACS has no "blueprint" category, so this is *not* installed as a HACS
-> repository. Use the native blueprint import below. No `hacs.json` is needed.
-
 ## Repository layout
 
 ```
@@ -37,11 +34,22 @@ https://raw.githubusercontent.com/koenhausmans/ha-motion-light-multisensor/maste
 Native import is a one-time copy — to update, re-import the same URL (it overwrites
 the existing blueprint of the same name).
 
-## Optional: update tracking
+## Optional: update notifications
 
-For HACS-style "new version available" notifications, install a blueprint-updater
-integration (e.g. `blueprints-updater`) — added to HACS as a custom repository with
-category **Integration** — which adds native update entities for blueprints.
+To get "new version available" notifications for this blueprint, use the
+[Blueprints Updater](https://github.com/luuquangvu/blueprints-updater) integration:
+
+1. **Install it through HACS.** Search for *Blueprints Updater*. If it isn't in the
+   default store, add `https://github.com/luuquangvu/blueprints-updater` as a custom
+   repository with category **Integration**, then download it and restart Home
+   Assistant.
+2. **Add the integration:** **Settings → Devices & Services → Add Integration →
+   Blueprints Updater**, and pick your update options (auto-update, interval, etc.).
+
+No URL needs to be entered manually: the integration automatically detects any
+blueprint that carries a `source_url` in its metadata, which Home Assistant records
+for you when you import this blueprint from the raw URL above. Detected updates show
+up as native `update` entities.
 
 ## Versioning
 

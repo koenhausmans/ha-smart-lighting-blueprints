@@ -1,0 +1,271 @@
+blueprint:
+  name: Motion Light – multi-sensor, sun-based brightness, live updates
+  description: >
+    Turns light(s) ON when ANY selected motion sensor detects motion, and OFF
+    (with a 1s fade) only once ALL of them have been clear for an optional
+    delay. New motion cancels the off; the delay lives in a template trigger's
+    `for` so the periodic refresh can't disturb it. Brightness optionally
+    follows the sun's elevation on a sine curve, with separate minimums and
+    low-elevation thresholds for morning vs evening, and an optional auto-scale
+    of the high threshold to today's peak sun so winter days aren't dimmer.
+    While occupied, brightness is refreshed on a timer — but only on lights
+    that are already on, and (with the optional helper) only on lights you
+    haven't manually changed.
+  domain: automation
+  input:
+    motion_sensors:
+      name: Motion sensors
+      description: >
+        One or more motion sensors. If your Zigbee2MQTT sensors expose as
+        device_class "occupancy", remove the device_class line or pick manually.
+      selector:
+        entity:
+          domain: binary_sensor
+          device_class: motion
+          multiple: true
+
+    lights:
+      name: Light(s)
+      description: Pick the light ENTITIES to control (not areas/devices).
+      selector:
+        entity:
+          domain: light
+          multiple: true
+
+    no_motion_delay:
+      name: No-motion delay
+      description: How long ALL sensors must stay clear before turning off.
+      default:
+        minutes: 1
+      selector:
+        duration: {}
+
+    brightness_update_interval:
+      name: Brightness update frequency
+      description: How often to refresh sun-based brightness while occupied.
+      default: "/15"
+      selector:
+        select:
+          options:
+            - { label: "Every 5 minutes", value: "/5" }
+            - { label: "Every 10 minutes", value: "/10" }
+            - { label: "Every 15 minutes", value: "/15" }
+            - { label: "Every 30 minutes", value: "/30" }
+
+    last_auto_helper:
+      name: Last auto-brightness helper (optional)
+      description: >
+        An input_number helper (create one per room). The automation writes its
+        last automatic brightness here. On a tick it then refreshes ONLY lights
+        whose brightness still matches this value (within the tolerance below) —
+        so lights you have manually changed are left alone until the next
+        motion event. Leave empty to disable manual-override protection.
+      default: []
+      selector:
+        entity:
+          domain: input_number
+
+    override_tolerance:
+      name: Manual-override tolerance (%)
+      description: >
+        A light counts as manually changed if its brightness differs from the
+        stored automatic value by more than this. Lower = stricter.
+      default: 3
+      selector:
+        number: { min: 0, max: 25, unit_of_measurement: "%", mode: box }
+
+    dynamic_brightness:
+      name: Use sun-based brightness
+      description: If off, the fixed brightness below is always used.
+      default: true
+      selector:
+        boolean: {}
+
+    brightness_max:
+      name: Maximum brightness (%)
+      default: 100
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    brightness_min_morning:
+      name: Minimum brightness – morning (sun rising)
+      default: 15
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    brightness_min_evening:
+      name: Minimum brightness – evening (sun setting)
+      default: 30
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    elevation_low_morning:
+      name: Low sun elevation – morning (sun rising)
+      default: 0
+      selector:
+        number: { min: -18, max: 60, unit_of_measurement: "°", mode: box }
+
+    elevation_low_evening:
+      name: Low sun elevation – evening (sun setting)
+      default: 0
+      selector:
+        number: { min: -18, max: 60, unit_of_measurement: "°", mode: box }
+
+    auto_elevation_high:
+      name: Auto-scale high threshold to today's peak sun
+      description: >
+        If ON, the high elevation = today's max sun elevation (solar noon),
+        from your latitude and the date. Midday is then full brightness every
+        day, so winter days aren't dimmer. The fixed value below is ignored.
+        Keep the low thresholds at/below 0 so the span stays valid in winter.
+      default: false
+      selector:
+        boolean: {}
+
+    elevation_high:
+      name: High sun elevation (maximum brightness) – fixed
+      description: Used only when auto-scaling above is OFF.
+      default: 40
+      selector:
+        number: { min: 1, max: 90, unit_of_measurement: "°", mode: box }
+
+    fixed_brightness:
+      name: Fixed brightness (%)
+      description: Used only when sun-based brightness is disabled.
+      default: 80
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+mode: restart
+
+trigger_variables:
+  motion_list: !input motion_sensors
+
+variables:
+  motion_entities: !input motion_sensors
+  light_entities: !input lights
+  helper: !input last_auto_helper
+  override_tol: !input override_tolerance
+  b_max: !input brightness_max
+  b_min_morning: !input brightness_min_morning
+  b_min_evening: !input brightness_min_evening
+  use_dynamic: !input dynamic_brightness
+  fixed_b: !input fixed_brightness
+  elev_low_morning: !input elevation_low_morning
+  elev_low_evening: !input elevation_low_evening
+  auto_high: !input auto_elevation_high
+  elev_high_fixed: !input elevation_high
+  target_brightness: >
+    {% if use_dynamic %}
+      {% set elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
+      {% set rising = state_attr('sun.sun', 'rising') %}
+      {% set b_min   = b_min_morning   if rising else b_min_evening %}
+      {% set elev_low = elev_low_morning if rising else elev_low_evening %}
+      {% if auto_high %}
+        {% set lat = state_attr('zone.home', 'latitude') | float(45) %}
+        {% set doy = now().strftime('%j') | int %}
+        {% set decl = -23.45 * cos( (360 / 365 * (doy + 10)) | radians ) %}
+        {% set elev_high = 90 - ((lat - decl) | abs) %}
+      {% else %}
+        {% set elev_high = elev_high_fixed %}
+      {% endif %}
+      {% set span = elev_high - elev_low %}
+      {% set frac = ((elevation - elev_low) / span) if span > 0 else 0 %}
+      {% set frac = [[frac, 0] | max, 1] | min %}
+      {% set factor = (1 - cos(frac * pi)) / 2 %}
+      {% set b = b_min + (b_max - b_min) * factor %}
+      {{ [[b | round(0) | int, 1] | max, 100] | min }}
+    {% else %}
+      {{ fixed_b }}
+    {% endif %}
+  # Lights to refresh on a tick: currently ON, and (if a helper is configured)
+  # still at the last automatic value (i.e. not manually overridden).
+  tick_targets: >
+    {% set helper_set = (helper is string) and (helper | length > 0) %}
+    {% set stored = states(helper) | float(-999) if helper_set else -999 %}
+    {% set ns = namespace(t=[]) %}
+    {% for e in light_entities %}
+      {% if is_state(e, 'on') %}
+        {% if not helper_set %}
+          {% set ns.t = ns.t + [e] %}
+        {% else %}
+          {% set cur = (state_attr(e, 'brightness') | float(0)) / 255 * 100 %}
+          {% if ((cur - stored) | abs) <= override_tol %}
+            {% set ns.t = ns.t + [e] %}
+          {% endif %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.t }}
+
+trigger:
+  - platform: state
+    entity_id: !input motion_sensors
+    to: "on"
+    id: motion
+
+  - platform: template
+    value_template: >
+      {{ expand(motion_list) | selectattr('state', 'eq', 'on')
+         | list | count == 0 }}
+    for: !input no_motion_delay
+    id: all_clear
+
+  - platform: time_pattern
+    minutes: !input brightness_update_interval
+    id: tick
+
+action:
+  - choose:
+      # Motion: turn ALL selected lights on at the current target brightness,
+      # and record that value as the automatic baseline.
+      - conditions:
+          - condition: trigger
+            id: motion
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input lights
+            data:
+              brightness_pct: "{{ target_brightness }}"
+          - if:
+              - "{{ (helper is string) and (helper | length > 0) }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: !input last_auto_helper
+                data:
+                  value: "{{ target_brightness }}"
+
+      # Tick: refresh brightness on the eligible lights only.
+      - conditions:
+          - condition: trigger
+            id: tick
+          - "{{ use_dynamic }}"
+          - "{{ tick_targets | count > 0 }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ tick_targets }}"
+            data:
+              brightness_pct: "{{ target_brightness }}"
+              transition: 2
+          - if:
+              - "{{ (helper is string) and (helper | length > 0) }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: !input last_auto_helper
+                data:
+                  value: "{{ target_brightness }}"
+
+      # All clear for the delay: fade off over 1 second.
+      - conditions:
+          - condition: trigger
+            id: all_clear
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: !input lights
+            data:
+              transition: 1

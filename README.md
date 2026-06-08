@@ -80,6 +80,12 @@ Whenever the lights are turned **off** (Shelly toggle-off or Hue `off_press`), t
   press. The Shelly is unaffected (its multi-press is native).
 - **Brightness stepping is Hue-only** (it has dedicated up/down keys). This mirrors the
   hardware.
+- **Sun-tracking refresh while on.** When the lights are on, brightness is re-applied on a
+  timer (`brightness_update_interval`, default every 15 min) so it follows the sun through
+  the evening. With the optional `input_number` helper assigned, the refresh skips lights
+  you've **manually dimmed** (Hue up/down) and lights set by an **active scene**, only
+  touching those still at the last automatic value (within `override_tolerance`). Leave the
+  helper empty and the refresh repaints every light that is on.
 - The scene `input_select`'s options must be scene **entity_ids** (e.g.
   `scene.bedroom_relax`). Cycling selects the next option, then calls `scene.turn_on` on
   that value.
@@ -107,6 +113,11 @@ https://raw.githubusercontent.com/koenhausmans/ha-smart-lighting-blueprints/mast
   instance** — assigned to the multi-press helper input. It stores the last ON event so
   double/triple presses can be detected. Leave it empty to keep the Hue ON key instant
   (single press only).
+- *(Optional, for the sun-tracking refresh's manual-override & scene protection)* an
+  `input_number` helper — **one per automation instance** — assigned to the
+  last-auto-brightness helper input. It stores the last automatic brightness so the timed
+  refresh leaves manually-dimmed and scene-lit lights alone. Leave it empty to refresh
+  every light that is on.
 
 ---
 

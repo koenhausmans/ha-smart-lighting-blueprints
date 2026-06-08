@@ -168,6 +168,42 @@ blueprint:
       selector:
         number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
 
+    brightness_update_interval:
+      name: Brightness update frequency
+      description: How often to refresh sun-based brightness while lights are on.
+      default: "/15"
+      selector:
+        select:
+          options:
+            - { label: "Every 5 minutes", value: "/5" }
+            - { label: "Every 10 minutes", value: "/10" }
+            - { label: "Every 15 minutes", value: "/15" }
+            - { label: "Every 30 minutes", value: "/30" }
+
+    last_auto_helper:
+      name: Last auto-brightness helper (optional)
+      description: >
+        An input_number helper (create one per automation instance). The
+        automation writes its last automatic brightness here. On a tick it then
+        refreshes ONLY lights whose brightness still matches this value (within
+        the tolerance below) — so lights you have manually dimmed, and lights set
+        by an activated scene, are left alone until the next plain turn-on. Leave
+        empty to disable manual-override protection (the tick then refreshes every
+        light that is on).
+      default: []
+      selector:
+        entity:
+          domain: input_number
+
+    override_tolerance:
+      name: Manual-override tolerance (%)
+      description: >
+        A light counts as manually changed if its brightness differs from the
+        stored automatic value by more than this. Lower = stricter.
+      default: 3
+      selector:
+        number: { min: 0, max: 25, unit_of_measurement: "%", mode: box }
+
 mode: parallel
 max: 10
 
@@ -202,6 +238,8 @@ variables:
   elev_low_evening: !input elevation_low_evening
   auto_high: !input auto_elevation_high
   elev_high_fixed: !input elevation_high
+  helper: !input last_auto_helper
+  override_tol: !input override_tolerance
   target_brightness: >
     {% if use_dynamic %}
       {% set elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
@@ -225,6 +263,25 @@ variables:
     {% else %}
       {{ fixed_b }}
     {% endif %}
+  # Lights to refresh on a tick: currently ON, and (if a helper is configured)
+  # still at the last automatic value (i.e. not manually dimmed or scene-set).
+  tick_targets: >
+    {% set helper_set = (helper is string) and (helper | length > 0) %}
+    {% set stored = states(helper) | float(-999) if helper_set else -999 %}
+    {% set ns = namespace(t=[]) %}
+    {% for e in light_entities %}
+      {% if is_state(e, 'on') %}
+        {% if not helper_set %}
+          {% set ns.t = ns.t + [e] %}
+        {% else %}
+          {% set cur = (state_attr(e, 'brightness') | float(0)) / 255 * 100 %}
+          {% if ((cur - stored) | abs) <= override_tol %}
+            {% set ns.t = ns.t + [e] %}
+          {% endif %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.t }}
 
 trigger:
   # Shelly single push: toggle the lights.
@@ -283,6 +340,11 @@ trigger:
     subtype: down_press
     id: bright_down
 
+  # Time-pattern tick: refresh sun-based brightness on occupied, non-overridden lights.
+  - platform: time_pattern
+    minutes: !input brightness_update_interval
+    id: tick
+
 action:
   - choose:
       # Shelly single push: if any light is on, turn all off and reset the scene
@@ -308,6 +370,14 @@ action:
                   entity_id: !input lights
                 data:
                   brightness_pct: "{{ target_brightness }}"
+              - if:
+                  - "{{ (helper is string) and (helper | length > 0) }}"
+                then:
+                  - service: input_number.set_value
+                    target:
+                      entity_id: !input last_auto_helper
+                    data:
+                      value: "{{ target_brightness }}"
 
       # Hue ON key: virtual single / double / triple press.
       #   - helper not configured  → turn on at target brightness immediately.
@@ -327,6 +397,14 @@ action:
                   entity_id: !input lights
                 data:
                   brightness_pct: "{{ target_brightness }}"
+              - if:
+                  - "{{ (helper is string) and (helper | length > 0) }}"
+                then:
+                  - service: input_number.set_value
+                    target:
+                      entity_id: !input last_auto_helper
+                    data:
+                      value: "{{ target_brightness }}"
             else:
               - variables:
                   this_ts: "{{ as_timestamp(now()) }}"
@@ -348,6 +426,14 @@ action:
                   - service: scene.turn_on
                     target:
                       entity_id: "{{ states(scene_select) }}"
+                  - if:
+                      - "{{ (helper is string) and (helper | length > 0) }}"
+                    then:
+                      - service: input_number.set_value
+                        target:
+                          entity_id: !input last_auto_helper
+                        data:
+                          value: -999
                 else:
                   # Single / double: wait, then only act if still the latest press.
                   - delay:
@@ -365,6 +451,14 @@ action:
                       - service: scene.turn_on
                         target:
                           entity_id: "{{ states(scene_select) }}"
+                      - if:
+                          - "{{ (helper is string) and (helper | length > 0) }}"
+                        then:
+                          - service: input_number.set_value
+                            target:
+                              entity_id: !input last_auto_helper
+                            data:
+                              value: -999
                     else:
                       # Single: turn on at target brightness.
                       - service: light.turn_on
@@ -372,6 +466,14 @@ action:
                           entity_id: !input lights
                         data:
                           brightness_pct: "{{ target_brightness }}"
+                      - if:
+                          - "{{ (helper is string) and (helper | length > 0) }}"
+                        then:
+                          - service: input_number.set_value
+                            target:
+                              entity_id: !input last_auto_helper
+                            data:
+                              value: "{{ target_brightness }}"
 
       # Hue OFF key: turn all off and reset the scene list to its first option.
       - conditions:
@@ -407,6 +509,14 @@ action:
           - service: scene.turn_on
             target:
               entity_id: "{{ states(scene_select) }}"
+          - if:
+              - "{{ (helper is string) and (helper | length > 0) }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: !input last_auto_helper
+                data:
+                  value: -999
 
       # Shelly triple push: advance two scenes and activate the result.
       - conditions:
@@ -422,6 +532,14 @@ action:
           - service: scene.turn_on
             target:
               entity_id: "{{ states(scene_select) }}"
+          - if:
+              - "{{ (helper is string) and (helper | length > 0) }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: !input last_auto_helper
+                data:
+                  value: -999
 
       # Hue brightness-up key: step current brightness up.
       - conditions:
@@ -462,3 +580,25 @@ action:
             data:
               brightness_step_pct: "{{ -step }}"
               transition: 1
+
+      # Tick: refresh brightness on the eligible lights only (never scenes/manual dims).
+      - conditions:
+          - condition: trigger
+            id: tick
+          - "{{ use_dynamic }}"
+          - "{{ tick_targets | count > 0 }}"
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: "{{ tick_targets }}"
+            data:
+              brightness_pct: "{{ target_brightness }}"
+              transition: 2
+          - if:
+              - "{{ (helper is string) and (helper | length > 0) }}"
+            then:
+              - service: input_number.set_value
+                target:
+                  entity_id: !input last_auto_helper
+                data:
+                  value: "{{ target_brightness }}"

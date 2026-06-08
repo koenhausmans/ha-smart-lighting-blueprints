@@ -1,0 +1,334 @@
+blueprint:
+  name: Switch Light – Shelly / Hue button, sun-based brightness, scene cycling
+  description: >
+    Drive light(s) from a physical button instead of motion. A Shelly button's
+    single push toggles the lights (on → sun-based brightness, on → off); a
+    double push cycles to the next scene in an input_select and activates it,
+    and a triple push jumps two scenes forward. A Philips Hue / Zigbee2MQTT
+    dimmer is also supported: its ON key turns the lights on at sun-based
+    brightness, its OFF key turns them off, and the up / down keys step
+    brightness. Turning the lights off always resets the scene input_select back
+    to its first option. Brightness on turn-on optionally follows the sun's
+    elevation on a sine curve, with separate minimums and low-elevation
+    thresholds for morning vs evening and an optional auto-scale of the high
+    threshold to today's peak sun.
+  domain: automation
+  input:
+    shelly_device:
+      name: Shelly button device (optional)
+      description: >
+        The Shelly device whose button drives this automation. Leave empty if
+        you only use a Hue dimmer. Single push toggles the lights; double /
+        triple push cycle scenes.
+      default: []
+      selector:
+        device:
+          integration: shelly
+
+    shelly_button:
+      name: Shelly button subtype
+      description: >
+        The push event's button identifier for your Shelly. Single-channel
+        devices are usually "button1"; some report "button". Only used when a
+        Shelly device is selected above.
+      default: "button1"
+      selector:
+        text: {}
+
+    hue_device:
+      name: Hue / Zigbee2MQTT dimmer device (optional)
+      description: >
+        A Philips Hue (or other Zigbee2MQTT) dimmer exposed over MQTT. Leave
+        empty if you only use a Shelly button. ON / OFF keys turn the lights on
+        (sun-based) / off; up / down keys step brightness.
+      default: []
+      selector:
+        device:
+          integration: mqtt
+
+    lights:
+      name: Light(s)
+      description: Pick the light ENTITIES to control (not areas/devices).
+      selector:
+        entity:
+          domain: light
+          multiple: true
+
+    scene_input_select:
+      name: Scene list (input_select)
+      description: >
+        An input_select whose options are scene entity_ids (e.g.
+        scene.bedroom_relax), such as input_select.bedroom_scene_entities. A
+        double push selects the next option and activates that scene; a triple
+        push advances two; turning the lights off resets it to the first option.
+      selector:
+        entity:
+          domain: input_select
+
+    brightness_step:
+      name: Brightness step (%)
+      description: How much each Hue up / down key press changes brightness.
+      default: 10
+      selector:
+        number: { min: 1, max: 50, unit_of_measurement: "%", mode: box }
+
+    dynamic_brightness:
+      name: Use sun-based brightness
+      description: If off, the fixed brightness below is always used on turn-on.
+      default: true
+      selector:
+        boolean: {}
+
+    brightness_max:
+      name: Maximum brightness (%)
+      default: 100
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    brightness_min_morning:
+      name: Minimum brightness – morning (sun rising)
+      default: 15
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    brightness_min_evening:
+      name: Minimum brightness – evening (sun setting)
+      default: 30
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+    elevation_low_morning:
+      name: Low sun elevation – morning (sun rising)
+      default: 0
+      selector:
+        number: { min: -18, max: 60, unit_of_measurement: "°", mode: box }
+
+    elevation_low_evening:
+      name: Low sun elevation – evening (sun setting)
+      default: 0
+      selector:
+        number: { min: -18, max: 60, unit_of_measurement: "°", mode: box }
+
+    auto_elevation_high:
+      name: Auto-scale high threshold to today's peak sun
+      description: >
+        If ON, the high elevation = today's max sun elevation (solar noon),
+        from your latitude and the date. Midday is then full brightness every
+        day, so winter days aren't dimmer. The fixed value below is ignored.
+        Keep the low thresholds at/below 0 so the span stays valid in winter.
+      default: false
+      selector:
+        boolean: {}
+
+    elevation_high:
+      name: High sun elevation (maximum brightness) – fixed
+      description: Used only when auto-scaling above is OFF.
+      default: 40
+      selector:
+        number: { min: 1, max: 90, unit_of_measurement: "°", mode: box }
+
+    fixed_brightness:
+      name: Fixed brightness (%)
+      description: Used only when sun-based brightness is disabled.
+      default: 80
+      selector:
+        number: { min: 1, max: 100, unit_of_measurement: "%", mode: slider }
+
+mode: queued
+max: 10
+
+variables:
+  light_entities: !input lights
+  scene_select: !input scene_input_select
+  step: !input brightness_step
+  b_max: !input brightness_max
+  b_min_morning: !input brightness_min_morning
+  b_min_evening: !input brightness_min_evening
+  use_dynamic: !input dynamic_brightness
+  fixed_b: !input fixed_brightness
+  elev_low_morning: !input elevation_low_morning
+  elev_low_evening: !input elevation_low_evening
+  auto_high: !input auto_elevation_high
+  elev_high_fixed: !input elevation_high
+  target_brightness: >
+    {% if use_dynamic %}
+      {% set elevation = state_attr('sun.sun', 'elevation') | float(-90) %}
+      {% set rising = state_attr('sun.sun', 'rising') %}
+      {% set b_min   = b_min_morning   if rising else b_min_evening %}
+      {% set elev_low = elev_low_morning if rising else elev_low_evening %}
+      {% if auto_high %}
+        {% set lat = state_attr('zone.home', 'latitude') | float(45) %}
+        {% set doy = now().strftime('%j') | int %}
+        {% set decl = -23.45 * cos( (360 / 365 * (doy + 10)) * pi / 180 ) %}
+        {% set elev_high = 90 - ((lat - decl) | abs) %}
+      {% else %}
+        {% set elev_high = elev_high_fixed %}
+      {% endif %}
+      {% set span = elev_high - elev_low %}
+      {% set frac = ((elevation - elev_low) / span) if span > 0 else 0 %}
+      {% set frac = [[frac, 0] | max, 1] | min %}
+      {% set factor = (1 - cos(frac * pi)) / 2 %}
+      {% set b = b_min + (b_max - b_min) * factor %}
+      {{ [[b | round(0) | int, 1] | max, 100] | min }}
+    {% else %}
+      {{ fixed_b }}
+    {% endif %}
+
+trigger:
+  # Shelly single push: toggle the lights.
+  - platform: device
+    domain: shelly
+    device_id: !input shelly_device
+    type: single_push
+    subtype: !input shelly_button
+    id: toggle
+
+  # Shelly double push: next scene.
+  - platform: device
+    domain: shelly
+    device_id: !input shelly_device
+    type: double_push
+    subtype: !input shelly_button
+    id: scene_next
+
+  # Shelly triple push: two scenes forward.
+  - platform: device
+    domain: shelly
+    device_id: !input shelly_device
+    type: triple_push
+    subtype: !input shelly_button
+    id: scene_next2
+
+  # Hue ON key: force on at sun-based brightness.
+  - platform: device
+    domain: mqtt
+    device_id: !input hue_device
+    type: action
+    subtype: on_press
+    id: light_on
+
+  # Hue OFF key: force off.
+  - platform: device
+    domain: mqtt
+    device_id: !input hue_device
+    type: action
+    subtype: off_press
+    id: light_off
+
+  # Hue brightness-up key.
+  - platform: device
+    domain: mqtt
+    device_id: !input hue_device
+    type: action
+    subtype: up_press
+    id: bright_up
+
+  # Hue brightness-down key.
+  - platform: device
+    domain: mqtt
+    device_id: !input hue_device
+    type: action
+    subtype: down_press
+    id: bright_down
+
+action:
+  - choose:
+      # Shelly single push: if any light is on, turn all off and reset the scene
+      # list to its first option; otherwise turn all on at target brightness.
+      - conditions:
+          - condition: trigger
+            id: toggle
+        sequence:
+          - if:
+              - "{{ expand(light_entities) | selectattr('state','eq','on') | list | count > 0 }}"
+            then:
+              - service: light.turn_off
+                target:
+                  entity_id: !input lights
+                data:
+                  transition: 1
+              - service: input_select.select_first
+                target:
+                  entity_id: !input scene_input_select
+            else:
+              - service: light.turn_on
+                target:
+                  entity_id: !input lights
+                data:
+                  brightness_pct: "{{ target_brightness }}"
+
+      # Hue ON key: turn all on at target brightness.
+      - conditions:
+          - condition: trigger
+            id: light_on
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input lights
+            data:
+              brightness_pct: "{{ target_brightness }}"
+
+      # Hue OFF key: turn all off and reset the scene list to its first option.
+      - conditions:
+          - condition: trigger
+            id: light_off
+        sequence:
+          - service: light.turn_off
+            target:
+              entity_id: !input lights
+            data:
+              transition: 1
+          - service: input_select.select_first
+            target:
+              entity_id: !input scene_input_select
+
+      # Shelly double push: advance to the next scene and activate it.
+      - conditions:
+          - condition: trigger
+            id: scene_next
+        sequence:
+          - service: input_select.select_next
+            target:
+              entity_id: !input scene_input_select
+          - service: scene.turn_on
+            target:
+              entity_id: "{{ states(scene_select) }}"
+
+      # Shelly triple push: advance two scenes and activate the result.
+      - conditions:
+          - condition: trigger
+            id: scene_next2
+        sequence:
+          - service: input_select.select_next
+            target:
+              entity_id: !input scene_input_select
+          - service: input_select.select_next
+            target:
+              entity_id: !input scene_input_select
+          - service: scene.turn_on
+            target:
+              entity_id: "{{ states(scene_select) }}"
+
+      # Hue brightness-up key: step current brightness up.
+      - conditions:
+          - condition: trigger
+            id: bright_up
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input lights
+            data:
+              brightness_step_pct: "{{ step }}"
+              transition: 1
+
+      # Hue brightness-down key: step current brightness down.
+      - conditions:
+          - condition: trigger
+            id: bright_down
+        sequence:
+          - service: light.turn_on
+            target:
+              entity_id: !input lights
+            data:
+              brightness_step_pct: "{{ -step }}"
+              transition: 1

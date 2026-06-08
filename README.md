@@ -1,9 +1,15 @@
-# Smart Motion Lights (Home Assistant Blueprint)
+# Smart Lighting Blueprints (Home Assistant)
 
-Motion-activated lights for multiple sensors per room, with sun-elevation–based
-brightness (sine curve, separate morning/evening minimums, optional auto-scaling
-to today's peak sun), a cancellable off-delay, periodic brightness refresh while
-occupied, and optional manual-override protection.
+A pair of Home Assistant automation blueprints that share the same sun-elevation–based
+brightness engine (sine curve, separate morning/evening minimums, optional auto-scaling
+to today's peak sun):
+
+1. **Motion Light (multi-sensor)** — motion-activated lights for multiple sensors per
+   room, with a cancellable off-delay, periodic brightness refresh while occupied, and
+   optional manual-override protection.
+2. **Switch Light + Scenes** — the same kind of lights driven by a physical button
+   (Shelly) or dimmer (Philips Hue / Zigbee2MQTT): single press toggles, double / triple
+   press cycle through scenes, and the Hue up / down keys step brightness.
 
 ## Repository layout
 
@@ -12,31 +18,132 @@ occupied, and optional manual-override protection.
 ├── AGENTS.md                        # guidance for AI agents
 ├── LICENSE
 ├── README.md
-└── motion_light_multisensor.yaml   # the blueprint
+├── motion_light_multisensor.yaml    # Blueprint 1 – motion-driven
+└── switch_light_scenes.yaml         # Blueprint 2 – button/switch-driven
 ```
 
 The repository lives at
-[github.com/koenhausmans/ha-motion-light-multisensor](https://github.com/koenhausmans/ha-motion-light-multisensor).
+[github.com/koenhausmans/ha-smart-lighting-blueprints](https://github.com/koenhausmans/ha-smart-lighting-blueprints).
 
-## Install (one-click import)
+---
 
-Click the badge:
+## Blueprint 1 — Motion Light (multi-sensor)
 
-[![Open your Home Assistant instance and show the blueprint import dialog.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fkoenhausmans%2Fha-motion-light-multisensor%2Fmaster%2Fmotion_light_multisensor.yaml)
+Turns light(s) ON when ANY selected motion sensor detects motion, and OFF (with a 1s
+fade) only once ALL of them have been clear for an optional delay. New motion cancels the
+pending off. While occupied, brightness is refreshed on a timer — but only on lights that
+are already on, and (with the optional helper) only on lights you haven't manually
+changed.
 
-Or manually: **Settings → Automations & Scenes → Blueprints → Import Blueprint**,
-and paste this raw URL:
+### Install (one-click import)
+
+[![Open your Home Assistant instance and show the blueprint import dialog.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fkoenhausmans%2Fha-smart-lighting-blueprints%2Fmaster%2Fmotion_light_multisensor.yaml)
+
+Or manually: **Settings → Automations & Scenes → Blueprints → Import Blueprint**, and
+paste this raw URL:
 
 ```
-https://raw.githubusercontent.com/koenhausmans/ha-motion-light-multisensor/master/motion_light_multisensor.yaml
+https://raw.githubusercontent.com/koenhausmans/ha-smart-lighting-blueprints/master/motion_light_multisensor.yaml
 ```
 
-Native import is a one-time copy — to update, re-import the same URL (it overwrites
-the existing blueprint of the same name).
+### Requirements
+
+- A `sun.sun` entity (default in HA).
+- For per-room manual-override protection: one `input_number` helper per room.
+
+---
+
+## Blueprint 2 — Switch Light + Scenes
+
+Drives the same lights from a physical button instead of motion. Two hardware families
+are supported, and you can use either or both (leave the other device empty):
+
+| Press | Shelly (`single_push` button) | Hue / Zigbee2MQTT dimmer (`action`) |
+|---|---|---|
+| Single / ON | **Toggle** — off → on at sun-based brightness; on → off | `on_press` → on at sun-based brightness · `off_press` → off |
+| Double | Next scene: advance the input_select, then activate that scene | — |
+| Triple | Advance two scenes, then activate the result | — |
+| Up / Down | — | `up_press` / `down_press` → step brightness ±step% |
+
+Whenever the lights are turned **off** (Shelly toggle-off or Hue `off_press`), the scene
+`input_select` is reset to its **first** option.
+
+- **Scene cycling is Shelly-only** (a single-button Shelly exposes single/double/triple
+  push; a Hue dimmer has no multi-press). **Brightness stepping is Hue-only** (it has
+  dedicated up/down keys). This mirrors the hardware.
+- The scene `input_select`'s options must be scene **entity_ids** (e.g.
+  `scene.bedroom_relax`). Cycling selects the next option, then calls `scene.turn_on` on
+  that value.
+- **`shelly_button` subtype gotcha:** the push event's button identifier varies by model.
+  Single-channel Shellys are usually `button1`; some report `button`. Set the input to
+  match what your device exposes.
+
+### Install (one-click import)
+
+[![Open your Home Assistant instance and show the blueprint import dialog.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fkoenhausmans%2Fha-smart-lighting-blueprints%2Fmaster%2Fswitch_light_scenes.yaml)
+
+Or manually paste this raw URL into the Import Blueprint dialog:
+
+```
+https://raw.githubusercontent.com/koenhausmans/ha-smart-lighting-blueprints/master/switch_light_scenes.yaml
+```
+
+### Requirements
+
+- A `sun.sun` entity (default in HA).
+- An `input_select` helper whose options are scene entity_ids (e.g.
+  `input_select.bedroom_scene_entities`).
+- A Shelly button and/or a Hue (MQTT / Zigbee2MQTT) dimmer device.
+
+---
+
+## How the sun-based brightness (elevation) system works
+
+Both blueprints compute a turn-on brightness from the sun's current elevation, so the
+lights are dim around dawn/dusk and brighter at midday. The math (see the
+`target_brightness` template in either YAML):
+
+1. **Read the sun.** Take `sun.sun`'s `elevation`, and its `rising` attribute to decide
+   *morning vs evening*. The minimum brightness and the low-elevation threshold are split
+   on this — morning and evening can ramp differently
+   (`brightness_min_morning` / `brightness_min_evening`,
+   `elevation_low_morning` / `elevation_low_evening`).
+2. **Normalize.** `frac` is where the current elevation sits within
+   `[elevation_low, elevation_high]`, clamped to `0…1`. Below `elevation_low` → `0`
+   (minimum brightness); at/above `elevation_high` → `1` (maximum brightness).
+3. **Smooth.** A cosine ease — `factor = (1 − cos(frac · π)) / 2` — turns the linear
+   fraction into a soft S-curve so brightness eases in and out rather than ramping
+   linearly.
+4. **Scale.** `brightness = brightness_min + (brightness_max − brightness_min) · factor`,
+   rounded and clamped to `1…100 %`.
+
+**Which setting controls what:**
+
+| Setting | Controls |
+|---|---|
+| `brightness_min_morning` / `brightness_min_evening` | Brightness floor at/below `elevation_low` |
+| `brightness_max` | Brightness ceiling at/above `elevation_high` |
+| `elevation_low_morning` / `elevation_low_evening` | Sun angle where the ramp *starts* |
+| `elevation_high` | Sun angle where the ramp *reaches max* (fixed mode) |
+| `auto_elevation_high` | If on, sets the high angle to today's solar-noon elevation (`90 − \|latitude − declination\|`) so midday is full brightness year-round; `elevation_high` is then ignored |
+| `dynamic_brightness` / `fixed_brightness` | Turn the whole sun engine off and use a flat brightness instead |
+
+### Tuning `elevation_high`
+
+Worth tuning: **`elevation_high`**. Peak sun is very seasonal — in the Netherlands /
+Central Europe solar noon is roughly **60° midsummer** but only **~14° midwinter**. With
+the default `elevation_high: 40`, a winter noon only reaches `frac ≈ 0.35`, so the light
+stays fairly dim even at midday — which may be exactly what you want (dark days → softer
+light), or not. For full midday brightness every day year-round, drop `elevation_high` to
+around **15** (or enable **auto-scale**, which tracks it for you). The `elevation_low`
+default of `0°` means the ramp tracks actual daylight; set it to **−6** to start
+brightening during civil twilight.
+
+---
 
 ## Optional: update notifications
 
-To get "new version available" notifications for this blueprint, use the
+To get "new version available" notifications for these blueprints, use the
 [Blueprints Updater](https://github.com/luuquangvu/blueprints-updater) integration:
 
 1. **Install it through HACS.** Search for *Blueprints Updater*. If it isn't in the
@@ -46,23 +153,24 @@ To get "new version available" notifications for this blueprint, use the
 2. **Add the integration:** **Settings → Devices & Services → Add Integration →
    Blueprints Updater**, and pick your update options (auto-update, interval, etc.).
 
-No URL needs to be entered manually: the integration automatically detects any
-blueprint that carries a `source_url` in its metadata, which Home Assistant records
-for you when you import this blueprint from the raw URL above. Detected updates show
-up as native `update` entities.
+No URL needs to be entered manually: the integration automatically detects any blueprint
+that carries a `source_url` in its metadata, which Home Assistant records for you when you
+import a blueprint from a raw URL above. Detected updates show up as native `update`
+entities.
+
+> **Note on the repo rename:** Home Assistant keys an imported blueprint by its
+> `source_url`. If you previously imported `motion_light_multisensor.yaml` from the old
+> `ha-motion-light-multisensor` URL, re-importing from the new
+> `ha-smart-lighting-blueprints` URL is treated as a *new* blueprint, not an update —
+> re-import once and remove the old copy.
 
 ## Versioning
 
-Version = the GitHub release tag, e.g. `v0.1.0`:
+Version = the GitHub release tag, e.g. `v0.2.0`:
 
 ```bash
-git tag v0.1.0
+git tag v0.2.0
 git push --tags
 ```
 
 Then publish it as a Release on GitHub.
-
-## Requirements
-
-- A `sun.sun` entity (default in HA).
-- For per-room manual-override protection: one `input_number` helper per room.

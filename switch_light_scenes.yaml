@@ -69,6 +69,15 @@ blueprint:
         entity:
           domain: input_select
 
+    scene_transition:
+      name: Scene transition time (s)
+      description: >
+        How long lights fade when a scene is activated (double / triple press).
+        Set to 0 for an instant switch. Applies to all scene activations.
+      default: 1
+      selector:
+        number: { min: 0, max: 30, step: 0.5, unit_of_measurement: "s", mode: box }
+
     brightness_step:
       name: Brightness step (%)
       description: How much each Hue up / down key press changes brightness.
@@ -210,6 +219,7 @@ max: 10
 variables:
   light_entities: !input lights
   scene_select: !input scene_input_select
+  scene_transition: !input scene_transition
   step: !input brightness_step
   evt_helper: !input helper_last_controller_event
   dp_delay: !input helper_double_press_delay
@@ -426,6 +436,8 @@ action:
                   - service: scene.turn_on
                     target:
                       entity_id: "{{ states(scene_select) }}"
+                    data:
+                      transition: "{{ scene_transition }}"
                   - if:
                       - "{{ (helper is string) and (helper | length > 0) }}"
                     then:
@@ -451,6 +463,8 @@ action:
                       - service: scene.turn_on
                         target:
                           entity_id: "{{ states(scene_select) }}"
+                        data:
+                          transition: "{{ scene_transition }}"
                       - if:
                           - "{{ (helper is string) and (helper | length > 0) }}"
                         then:
@@ -509,6 +523,8 @@ action:
           - service: scene.turn_on
             target:
               entity_id: "{{ states(scene_select) }}"
+            data:
+              transition: "{{ scene_transition }}"
           - if:
               - "{{ (helper is string) and (helper | length > 0) }}"
             then:
@@ -532,6 +548,8 @@ action:
           - service: scene.turn_on
             target:
               entity_id: "{{ states(scene_select) }}"
+            data:
+              transition: "{{ scene_transition }}"
           - if:
               - "{{ (helper is string) and (helper | length > 0) }}"
             then:

@@ -27,6 +27,24 @@ to wrap this blueprint in a custom integration. HACS has **no blueprint category
 so a bare blueprint repo is installed via Home Assistant's native blueprint import,
 not HACS.
 
+## Branch & PR workflow (AI changes)
+
+AI-generated changes are **never committed directly to `master`**. Every change lands
+through a pull request, mirroring the existing history (PRs #1, #2, …).
+
+1. **Branch off `master`.** Create a dedicated feature branch with a descriptive
+   kebab-case name (e.g. `scene-transition-time`, `hue-virtual-multipress`). Keep one
+   self-contained change per branch — do not pile unrelated edits onto an open branch.
+2. **Validate before committing** (see "Validating a change" below) — there is no CI, so
+   the structure / template / behaviour checks are the only safety net.
+3. **Commit** in the repo's style: an imperative subject line (`Add …`, `Fix …`), a body
+   explaining *why* with bullets for the notable points, and a
+   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>` trailer.
+4. **Keep scratch files out of commits.** `TODO.md` and similar local notes stay
+   untracked — do not add them to a PR.
+5. **Push and open a PR against `master`.** Merging is done via the GitHub PR (the history
+   uses merge commits), not by pushing to `master` directly.
+
 ## Validating a change
 
 There is no CI. Before committing an edit to the blueprint:

@@ -88,7 +88,8 @@ Whenever the lights are turned **off** (Shelly toggle-off or Hue `off_press`), t
   helper empty and the refresh repaints every light that is on.
 - The scene `input_select`'s options must be scene **entity_ids** (e.g.
   `scene.bedroom_relax`). Cycling selects the next option, then calls `scene.turn_on` on
-  that value.
+  that value with the configured `scene_transition` fade (default 1 s; set 0 for an
+  instant switch).
 - **`shelly_button` subtype gotcha:** the push event's button identifier varies by model.
   Single-channel Shellys are usually `button1`; some report `button`. Set the input to
   match what your device exposes.

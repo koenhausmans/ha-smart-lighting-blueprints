@@ -4,13 +4,16 @@ Guidance for AI agents working in this repository.
 
 ## Project
 
-Two Home Assistant **automation blueprints** that share one sun-elevation–based
-brightness engine. There is no application code, no build step, and no test framework —
-the deliverable is two YAML files plus their README.
+Three Home Assistant **automation blueprints**. There is no application code, no build
+step, and no test framework — the deliverable is the YAML files plus their README. The two
+lighting blueprints share one sun-elevation–based brightness engine; the notifier is
+standalone.
 
 - `motion_light_multisensor.yaml` — multi-sensor motion lighting.
 - `switch_light_scenes.yaml` — button/switch-driven lighting (Shelly + Hue/Z2M) with
   scene cycling.
+- `washing_machine_done_notifier.yaml` — repeating, acknowledgeable "appliance done"
+  notification driven by a power sensor (no sun engine).
 
 ## Repository structure
 
@@ -18,8 +21,9 @@ the deliverable is two YAML files plus their README.
 .
 ├── AGENTS.md
 ├── README.md
-├── motion_light_multisensor.yaml   # Blueprint 1 – motion-driven
-└── switch_light_scenes.yaml        # Blueprint 2 – button/switch-driven
+├── motion_light_multisensor.yaml      # Blueprint 1 – motion-driven
+├── switch_light_scenes.yaml           # Blueprint 2 – button/switch-driven
+└── washing_machine_done_notifier.yaml # Blueprint 3 – appliance-done notifier
 ```
 
 Do not add `hacs.json` or a `custom_components/` tree unless the task is explicitly
@@ -147,6 +151,32 @@ reintroduces a real failure.
   `brightness` round-trips can be off by ~1; do not set the default to 0.
 
 (See **Shared** above for the sun-based brightness invariants.)
+
+### `washing_machine_done_notifier.yaml`
+
+- **Cycle detection is two-stage and gated by the `input_boolean` helper.** The `running`
+  trigger (power above the running threshold) turns the helper ON; the `done` trigger
+  (power below the idle threshold, after `done_debounce`) only notifies *if the helper is
+  ON*, then turns it OFF. Without this gate an idle dip or a HA restart fires a false
+  "done". Never drop the helper or the `state: on` condition on the `done` branch.
+- **`mode: restart` is deliberate.** A new `running` event mid-alert restarts the run,
+  cancelling the in-progress notify loop and re-arming the helper. Do not change to
+  `queued`/`single`.
+- **The notify loop uses `repeat.until`, not `while`.** `until` runs the body once before
+  testing, so `wait` is always defined when `{{ wait.trigger is not none }}` is evaluated.
+  A `while` referencing `wait` would dereference it before the first `wait_for_trigger`.
+  On timeout (`wait.trigger is none`) it re-sends; on Acknowledge it stops and clears the
+  card.
+- **Acknowledge only works from the Companion app.** The stop signal is the
+  `mobile_app_notification_action` event matching `action_id` (`ACK_<TAG>`); only the HA
+  Companion app emits it. `notify_service` (the phone) must be a `mobile_app_*` service.
+  `extra_targets` are delivery-only mirrors (laptop / persistent / WhatsApp) and must not
+  be relied on to acknowledge.
+- **The `tag` ties re-sends together and derives the action id.** Re-sends reuse the tag so
+  a new card replaces the old one; the post-loop `clear_notification` uses the same tag.
+  Give each appliance a distinct tag if the blueprint is reused.
+- **No sun engine.** This blueprint shares none of the `target_brightness` /
+  `target_color_temp` code; keep it that way.
 
 ## Home Assistant templating rules to respect
 

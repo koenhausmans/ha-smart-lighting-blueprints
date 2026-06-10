@@ -1,0 +1,225 @@
+# Washing machine done — repeating, acknowledgeable notification (HA automation blueprint)
+# Copyright (c) 2026 Koen Hausmans — MIT License
+# Source: https://github.com/koenhausmans/ha-smart-lighting-blueprints
+blueprint:
+  name: Appliance done – repeating notification until acknowledged
+  description: >
+    Watches a power sensor (ideally a 5-minute mean) in front of an appliance
+    such as a washing machine. A wash cycle is detected when the power rises
+    above a "running" threshold and then drops below an "idle" threshold; only
+    then is a notification sent — so an idle dip or a Home Assistant restart
+    never raises a false alarm. The notification is sticky and carries an
+    Acknowledge button, and re-popups on a timer until you tap it on your phone.
+    Extra notify services (a laptop, a dashboard persistent notification, or a
+    WhatsApp bridge) can mirror the text, but the Acknowledge button must live on
+    the Home Assistant Companion app because only it emits the action event that
+    stops the loop.
+
+    Requires one input_boolean helper (to remember a cycle is in progress) and a
+    Companion-app notify service. Set the running threshold comfortably above the
+    idle threshold.
+  domain: automation
+  source_url: https://github.com/koenhausmans/ha-smart-lighting-blueprints/blob/master/washing_machine_done_notifier.yaml
+  input:
+    power_sensor:
+      name: Power sensor
+      description: >
+        The appliance power sensor, ideally a 5-minute mean (a statistics sensor)
+        so brief draw fluctuations during a cycle don't read as "done".
+      selector:
+        entity:
+          domain: sensor
+          device_class: power
+
+    idle_threshold:
+      name: Idle threshold (W)
+      description: >
+        When the power drops below this, the appliance is considered idle /
+        finished. For a washing machine the idle 5-minute mean is typically a
+        couple of watts.
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.5
+          unit_of_measurement: W
+          mode: box
+
+    running_threshold:
+      name: Running threshold (W)
+      description: >
+        The power must rise above this at some point for a cycle to count as
+        "running". Keep it comfortably above the idle threshold.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 4000
+          step: 1
+          unit_of_measurement: W
+          mode: box
+
+    done_debounce:
+      name: Done debounce
+      description: >
+        How long the power must stay below the idle threshold before declaring
+        the cycle finished. The mean already lags, so this can be short.
+      default:
+        minutes: 1
+      selector:
+        duration: {}
+
+    running_helper:
+      name: "Cycle-in-progress helper (input_boolean)"
+      description: >
+        A toggle helper that remembers a cycle is running. Create one via
+        Settings → Devices & Services → Helpers → Toggle. It is turned ON when
+        the appliance starts and OFF once the "done" notification is sent.
+      selector:
+        entity:
+          domain: input_boolean
+
+    notify_service:
+      name: Phone notify service
+      description: >
+        The Home Assistant Companion app notify service that carries the
+        Acknowledge button, e.g. notify.mobile_app_pixel. This is the device
+        whose Acknowledge tap stops the repeating alert.
+      selector:
+        text: {}
+
+    extra_targets:
+      name: Extra notify services (optional)
+      description: >
+        Additional notify services to mirror the text to, one per line, e.g.
+        notify.persistent_notification, a laptop Companion service, or a WhatsApp
+        bridge (CallMeBot / Twilio). These receive the message each repeat but
+        cannot acknowledge it.
+      default: ""
+      selector:
+        text:
+          multiline: true
+
+    repeat_interval:
+      name: Repeat interval
+      description: How long to wait before re-popping the alert if not yet acknowledged.
+      default:
+        minutes: 20
+      selector:
+        duration: {}
+
+    notify_title:
+      name: Notification title
+      default: Washing machine
+      selector:
+        text: {}
+
+    notify_message:
+      name: Notification message
+      default: The wash cycle is done ✅
+      selector:
+        text: {}
+
+    ack_title:
+      name: Acknowledge button label
+      default: Acknowledge
+      selector:
+        text: {}
+
+    tag:
+      name: Notification tag
+      description: >
+        Groups the re-sent notifications (a re-send replaces the previous card)
+        and derives the Acknowledge action id. Give each appliance a distinct
+        tag if you reuse this blueprint (e.g. washing_machine, dishwasher).
+      default: washing_machine
+      selector:
+        text: {}
+
+mode: restart
+
+variables:
+  notify_service: !input notify_service
+  extra_targets_raw: !input extra_targets
+  tag: !input tag
+  action_id: "{{ 'ACK_' ~ (tag | upper) }}"
+  extra_services: >-
+    {{ extra_targets_raw.split('\n') | map('trim') | select('!=', '') | list }}
+
+trigger:
+  - platform: numeric_state
+    entity_id: !input power_sensor
+    above: !input running_threshold
+    id: running
+  - platform: numeric_state
+    entity_id: !input power_sensor
+    below: !input idle_threshold
+    for: !input done_debounce
+    id: done
+
+action:
+  - choose:
+      # ── A cycle has started: arm, and clear any stale card ──
+      - conditions:
+          - "{{ trigger.id == 'running' }}"
+        sequence:
+          - service: input_boolean.turn_on
+            target:
+              entity_id: !input running_helper
+          - service: "{{ notify_service }}"
+            data:
+              message: clear_notification
+              data:
+                tag: "{{ tag }}"
+
+      # ── A cycle has finished: notify, repeat until acknowledged ──
+      - conditions:
+          - "{{ trigger.id == 'done' }}"
+          - condition: state
+            entity_id: !input running_helper
+            state: "on"
+        sequence:
+          # Consume the cycle so a later idle dip can't re-alarm.
+          - service: input_boolean.turn_off
+            target:
+              entity_id: !input running_helper
+          - repeat:
+              sequence:
+                # Actionable, sticky notification on the phone.
+                - service: "{{ notify_service }}"
+                  data:
+                    title: !input notify_title
+                    message: !input notify_message
+                    data:
+                      tag: "{{ tag }}"
+                      sticky: true
+                      persistent: true
+                      actions:
+                        - action: "{{ action_id }}"
+                          title: !input ack_title
+                # Plain mirrors (laptop / persistent / WhatsApp).
+                - repeat:
+                    for_each: "{{ extra_services }}"
+                    sequence:
+                      - service: "{{ repeat.item }}"
+                        data:
+                          title: !input notify_title
+                          message: !input notify_message
+                # Wait for the Acknowledge tap, else time out and re-send.
+                - wait_for_trigger:
+                    - platform: event
+                      event_type: mobile_app_notification_action
+                      event_data:
+                        action: "{{ action_id }}"
+                  timeout: !input repeat_interval
+                  continue_on_timeout: true
+              until:
+                - condition: template
+                  value_template: "{{ wait.trigger is not none }}"
+          # Acknowledged → clear the card.
+          - service: "{{ notify_service }}"
+            data:
+              message: clear_notification
+              data:
+                tag: "{{ tag }}"

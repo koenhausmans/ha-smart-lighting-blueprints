@@ -1,8 +1,8 @@
 # Smart Lighting Blueprints (Home Assistant)
 
-A pair of Home Assistant automation blueprints that share the same sun-elevation–based
-brightness engine (sine curve, separate morning/evening minimums, optional auto-scaling
-to today's peak sun):
+A set of Home Assistant automation blueprints. The two lighting blueprints share the same
+sun-elevation–based brightness engine (sine curve, separate morning/evening minimums,
+optional auto-scaling to today's peak sun); the third is a standalone appliance notifier:
 
 1. **Motion Light (multi-sensor)** — motion-activated lights for multiple sensors per
    room, with a cancellable off-delay, periodic brightness refresh while occupied, and
@@ -10,6 +10,9 @@ to today's peak sun):
 2. **Switch Light + Scenes** — the same kind of lights driven by a physical button
    (Shelly) or dimmer (Philips Hue / Zigbee2MQTT): single press toggles, double / triple
    press cycle through scenes, and the Hue up / down keys step brightness.
+3. **Appliance done notifier** — watches a power sensor and sends a repeating,
+   acknowledgeable notification when a washing machine (or dishwasher / dryer) finishes
+   its cycle.
 
 ## Repository layout
 
@@ -18,8 +21,9 @@ to today's peak sun):
 ├── AGENTS.md                        # guidance for AI agents
 ├── LICENSE
 ├── README.md
-├── motion_light_multisensor.yaml    # Blueprint 1 – motion-driven
-└── switch_light_scenes.yaml         # Blueprint 2 – button/switch-driven
+├── motion_light_multisensor.yaml      # Blueprint 1 – motion-driven
+├── switch_light_scenes.yaml           # Blueprint 2 – button/switch-driven
+└── washing_machine_done_notifier.yaml # Blueprint 3 – appliance-done notifier
 ```
 
 The repository lives at
@@ -119,6 +123,50 @@ https://raw.githubusercontent.com/koenhausmans/ha-smart-lighting-blueprints/mast
   last-auto-brightness helper input. It stores the last automatic brightness so the timed
   refresh leaves manually-dimmed and scene-lit lights alone. Leave it empty to refresh
   every light that is on.
+
+---
+
+## Blueprint 3 — Appliance done notifier
+
+Watches a power sensor in front of an appliance (washing machine, dishwasher, dryer) and
+notifies you when its cycle finishes. A cycle is detected only when the power first rises
+above a **running** threshold and then drops below an **idle** threshold, so an idle dip or
+a Home Assistant restart never raises a false alarm. Use a **5-minute mean** power sensor
+(a statistics sensor) so brief draw fluctuations mid-cycle don't read as "done" — for a
+washing machine the idle mean is typically a couple of watts.
+
+The notification is **sticky** and carries an **Acknowledge** button, and **re-popups every
+20 minutes** (configurable) until you tap it. Tapping Acknowledge on the phone stops the
+loop and clears the card. If a new cycle starts while an alert is still looping, the loop is
+cancelled and re-armed automatically (`mode: restart`).
+
+- **The phone target must be a Home Assistant Companion app service** (e.g.
+  `notify.mobile_app_pixel`). Only the Companion app emits the
+  `mobile_app_notification_action` event that the Acknowledge button uses to stop the loop.
+- **Extra targets** (one notify service per line) mirror the text but can't acknowledge —
+  a laptop Companion service, `notify.persistent_notification`, or a **WhatsApp** bridge.
+  WhatsApp-to-self works via a delivery-only bridge such as **CallMeBot** (free) or
+  **Twilio** exposed as a `notify` service; it has no Acknowledge button, so keep the phone
+  Companion app as the primary target.
+- Set the **running threshold** comfortably above the **idle threshold**.
+
+### Install (one-click import)
+
+[![Open your Home Assistant instance and show the blueprint import dialog.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fkoenhausmans%2Fha-smart-lighting-blueprints%2Fmaster%2Fwashing_machine_done_notifier.yaml)
+
+Or manually paste this raw URL into the Import Blueprint dialog:
+
+```
+https://raw.githubusercontent.com/koenhausmans/ha-smart-lighting-blueprints/master/washing_machine_done_notifier.yaml
+```
+
+### Requirements
+
+- A power sensor for the appliance, ideally a **5-minute mean** statistics sensor.
+- One **`input_boolean`** helper (Settings → Devices & Services → Helpers → Toggle),
+  assigned to the cycle-in-progress input. It remembers a cycle is running.
+- A Home Assistant **Companion app** notify service for the phone (the Acknowledge target).
+- *(Optional)* any additional `notify.*` services to mirror the message to.
 
 ---
 

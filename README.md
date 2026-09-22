@@ -36,8 +36,8 @@ The repository lives at
 Turns light(s) ON when ANY selected motion sensor detects motion, and OFF (with a 1s
 fade) only once ALL of them have been clear for an optional delay. New motion cancels the
 pending off. While occupied, brightness is refreshed on a timer — but only on lights that
-are already on, and (with the optional helper) only on lights you haven't manually
-changed.
+are already on, and (with the optional helper) both timer refreshes and motion
+re-triggers leave lights you haven't manually changed alone.
 
 ### Install (one-click import)
 

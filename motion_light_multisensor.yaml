@@ -12,8 +12,8 @@ blueprint:
     low-elevation thresholds for morning vs evening, and an optional auto-scale
     of the high threshold to today's peak sun so winter days aren't dimmer.
     While occupied, brightness is refreshed on a timer — but only on lights
-    that are already on, and (with the optional helper) only on lights you
-    haven't manually changed.
+    that are already on, and (with the optional helper) both timer refreshes
+    and motion re-triggers leave lights you've manually changed alone.
   domain: automation
   source_url: https://github.com/koenhausmans/ha-smart-lighting-blueprints/blob/master/motion_light_multisensor.yaml
   input:
@@ -63,10 +63,11 @@ blueprint:
       name: Last auto-brightness helper (optional)
       description: >
         An input_number helper (create one per room). The automation writes its
-        last automatic brightness here. On a tick it then refreshes ONLY lights
-        whose brightness still matches this value (within the tolerance below) —
-        so lights you have manually changed are left alone until the next
-        motion event. Leave empty to disable manual-override protection.
+        last automatic brightness here. On a tick or a new motion event it then
+        touches ONLY lights whose brightness still matches this value (within
+        the tolerance below) — while off lights always turn on — so lights you
+        have manually changed are left alone until all clear turns them off.
+        Leave empty to disable manual-override protection.
       default: []
       selector:
         entity:
@@ -250,6 +251,25 @@ variables:
       {% endif %}
     {% endfor %}
     {{ ns.t }}
+  # Lights to turn on for motion: all OFF lights, plus any ON lights that have NOT
+  # been manually overridden (within tolerance of the last automatic value).
+  motion_targets: >
+    {% set helper_set = (helper is string) and (helper | length > 0) %}
+    {% set stored = states(helper) | float(-999) if helper_set else -999 %}
+    {% set ns = namespace(t=[]) %}
+    {% for e in light_entities %}
+      {% if not is_state(e, 'on') %}
+        {% set ns.t = ns.t + [e] %}
+      {% elif not helper_set %}
+        {% set ns.t = ns.t + [e] %}
+      {% else %}
+        {% set cur = (state_attr(e, 'brightness') | float(0)) / 255 * 100 %}
+        {% if ((cur - stored) | abs) <= override_tol %}
+          {% set ns.t = ns.t + [e] %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.t }}
 
 trigger:
   - platform: state
@@ -270,15 +290,16 @@ trigger:
 
 action:
   - choose:
-      # Motion: turn ALL selected lights on at the current target brightness,
+      # Motion: turn eligible lights on at the current target brightness,
       # and record that value as the automatic baseline.
       - conditions:
           - condition: trigger
             id: motion
+          - "{{ motion_targets | count > 0 }}"
         sequence:
           - service: light.turn_on
             target:
-              entity_id: !input lights
+              entity_id: "{{ motion_targets }}"
             data: >
               {{ {"brightness_pct": target_brightness}
                  | combine({"color_temp_kelvin": target_color_temp} if use_color else {}) }}

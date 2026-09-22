@@ -145,6 +145,10 @@ reintroduces a real failure.
   `expand(...) | selectattr('state','eq','on') | list | count == 0`.
 - **The `tick` branch must only touch lights that are already on** (via `tick_targets`)
   — it must never turn an off light back on.
+- **The `motion` branch turns on all off lights and respects manual override on
+  already-on lights** (via `motion_targets`). When the optional `input_number` helper
+  is configured, already-on lights that have been manually adjusted beyond
+  `override_tolerance` are left untouched on motion re-triggers.
 - **Manual-override protection** compares a light's current brightness to the last
   automatic value stored in the optional `input_number` helper, within
   `override_tolerance`. The tolerance exists because `brightness_pct` ↔ 0–255
